@@ -1,108 +1,112 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
-  <title>FQS Queue Monitor</title>
-  <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+  <meta charset="utf-8" />
+  <title>SignalR Simple Queue Viewer</title>
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
   <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/7.0.5/signalr.min.js"></script>
   <style>
-    body { font-family: Arial, sans-serif; margin: 20px; }
-    h2 { margin-top: 20px; }
-    .column { display: inline-block; vertical-align: top; margin-right: 30px; }
-    ul { list-style: none; padding: 0; background: #f5f5f5; min-width: 120px; min-height: 150px; border-radius: 8px; padding: 10px; }
-    li { padding: 6px; margin: 4px 0; background: white; border-radius: 4px; text-align: center; }
+    body{font-family:Arial,Helvetica,sans-serif;margin:20px;color:#111}
+    #status{display:inline-block;padding:6px 10px;border-radius:6px;margin-bottom:12px}
+    .connecting{background:#ffb74d;color:#000}
+    .connected{background:#81c784;color:#000}
+    .disconnected{background:#ef9a9a;color:#000}
+    #messages{margin-top:12px}
+    .msg{padding:6px 8px;border-radius:6px;background:#f1f1f1;margin:6px 0}
+    .small{color:#666;font-size:13px}
   </style>
 </head>
 <body>
-  <h1>Queue Monitor</h1>
+  <h2>SignalR Queue (simple)</h2>
+  <div id="status" class="connecting">Connecting...</div>
+  <div class="small">Negotiation: <span id="negotiation">not started</span></div>
 
-  <div class="column">
-    <h2>Queued</h2>
-    <ul id="queued"></ul>
-  </div>
-
-  <div class="column">
-    <h2>Started</h2>
-    <ul id="started"></ul>
-  </div>
-
-  <div class="column">
-    <h2>Done</h2>
-    <ul id="done"></ul>
-  </div>
+  <div id="messages"></div>
 
   <script>
-    const queuedList = document.getElementById("queued");
-    const startedList = document.getElementById("started");
-    const doneList = document.getElementById("done");
+    const HUB_BASE = "https://fqsapi.onrender.com/queueHub";
+    const statusEl = document.getElementById("status");
+    const negotiationEl = document.getElementById("negotiation");
+    const messagesEl = document.getElementById("messages");
 
-    let queued = [];
-    let started = [];
-    let done = [];
-
-    // Render lists
-    function render() {
-      queuedList.innerHTML = queued.map(q => `<li>${q}</li>`).join("");
-      startedList.innerHTML = started.map(s => `<li>${s}</li>`).join("");
-      doneList.innerHTML = done.map(d => `<li>${d}</li>`).join("");
+    function setStatus(name){
+      statusEl.className = name;
+      statusEl.textContent = name === "connected" ? "Connected" : name === "connecting" ? "Connecting..." : "Disconnected";
     }
 
-    // Fetch initial queue from API
-    async function fetchQueue() {
-      try {
-        const res = await axios.post("https://fqsapi.onrender.com/FireBaseFQS/GetActiveQueue", null, {
-          headers: { "Content-Type": "application/json" }
-        });
-        queued = res.data.queued || [];
-        started = res.data.inProgress || [];
-        done = res.data.completed || [];
-        render();
-      } catch (err) {
-        console.error("Failed to load queue:", err);
+    function appendMessage(text){
+      const p = document.createElement("div");
+      p.className = "msg";
+      p.textContent = text;
+      messagesEl.prepend(p); // newest on top
+    }
+
+    function statusLabel(n){
+      if(n === 1) return "Queued";
+      if(n === 2) return "In Progress";
+      if(n === 3) return "Ready/Done";
+      if(n === 4) return "Removed";
+      return "Unknown";
+    }
+
+    // 1) quick negotiate check (works in your snippet)
+    async function doNegotiate(){
+      try{
+        negotiationEl.textContent = "negotiating...";
+        const r = await fetch(HUB_BASE + "/negotiate", { method: "POST", headers: {'Content-Type':'application/json'} });
+        if(!r.ok) throw new Error(`${r.status} ${r.statusText}`);
+        const data = await r.json();
+        negotiationEl.textContent = `OK (connectionId: ${data.connectionId})`;
+        return true;
+      }catch(e){
+        negotiationEl.textContent = "negotiation failed";
+        appendMessage("Negotiation error: " + e.message);
+        return false;
       }
     }
 
-    // Connect to SignalR hub
-    const connection = new signalR.HubConnectionBuilder()
-      .withUrl("https://fqsapi.onrender.com/queueHub")
-      .withAutomaticReconnect()
-      .build();
+    // 2) start SignalR (v7 client)
+    async function startSignalR(){
+      setStatus("connecting");
+      const connection = new signalR.HubConnectionBuilder()
+        .withUrl(HUB_BASE)
+        .withAutomaticReconnect()
+        .build();
 
-    connection.on("ReceiveQueueCode", (receivedData) => {
-      console.log("SignalR message:", receivedData);
-      const [codeStr, statusStr] = receivedData.split(":");
-      const code = parseInt(codeStr);
-      const status = parseInt(statusStr);
+      connection.onreconnecting(() => setStatus("connecting"));
+      connection.onreconnected(() => setStatus("connected"));
+      connection.onclose(() => setStatus("disconnected"));
 
-      // Update local lists
-      if (status === 1) {
-        if (!queued.includes(code)) queued.push(code);
-      } else if (status === 2) {
-        queued = queued.filter(x => x !== code);
-        if (!started.includes(code)) started.push(code);
-      } else if (status === 3) {
-        started = started.filter(x => x !== code);
-        if (!done.includes(code)) done.push(code);
-      } else if (status === 4) {
-        done = done.filter(x => x !== code);
-      }
+      connection.on("ReceiveQueueCode", (payload) => {
+        try{
+          const parts = String(payload).split(":");
+          const code = parts[0];
+          const st = parseInt(parts[1], 10);
+          const label = statusLabel(st);
+          appendMessage(`Queue Code: ${code} — Status: ${st} (${label})`);
+        }catch(err){
+          appendMessage("Malformed payload: " + payload);
+        }
+      });
 
-      render();
-    });
-
-    async function startConnection() {
-      try {
+      try{
         await connection.start();
-        console.log("Connected to SignalR hub!");
-      } catch (err) {
-        console.error("SignalR connection failed:", err);
-        setTimeout(startConnection, 5000); // retry
+        setStatus("connected");
+        appendMessage("SignalR connected.");
+      }catch(err){
+        setStatus("disconnected");
+        appendMessage("SignalR start failed: " + (err && err.toString()));
+        // retry after delay
+        setTimeout(() => startSignalR(), 4000);
       }
     }
 
-    fetchQueue();
-    startConnection();
+    (async function boot(){
+      const ok = await doNegotiate();
+      // only attempt to start connection if negotiation succeeded
+      if(ok) await startSignalR();
+      else appendMessage("Skipping SignalR start due negotiation failure.");
+    })();
   </script>
 </body>
 </html>
