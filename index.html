@@ -1,0 +1,45 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Queue Status</title>
+</head>
+<body>
+  <h1>Queue Status</h1>
+  <button onclick="loadQueue()">Load Queue</button>
+
+  <h3>Queued</h3>
+  <pre id="queued">Loading...</pre>
+
+  <h3>In Progress</h3>
+  <pre id="inProgress">Loading...</pre>
+
+  <h3>Completed</h3>
+  <pre id="completed">Loading...</pre>
+
+  <script>
+    async function loadQueue() {
+      try {
+        const res = await fetch("https://fqsapi.onrender.com/FireBaseFQS/GetActiveQueue", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json"
+          }
+        });
+
+        const data = await res.json();
+        console.log(data);
+
+        // Display data
+        document.getElementById("queued").innerText = data.queued.join(", ") || "None";
+        document.getElementById("inProgress").innerText = data.inProgress.join(", ") || "None";
+        document.getElementById("completed").innerText = data.completed.join(", ") || "None";
+
+      } catch (err) {
+        console.error(err);
+        alert("Error loading queue: " + err.message);
+      }
+    }
+  </script>
+</body>
+</html>
