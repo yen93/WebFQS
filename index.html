@@ -1,112 +1,236 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="utf-8" />
-  <title>SignalR Simple Queue Viewer</title>
-  <meta name="viewport" content="width=device-width,initial-scale=1" />
-  <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/7.0.5/signalr.min.js"></script>
-  <style>
-    body{font-family:Arial,Helvetica,sans-serif;margin:20px;color:#111}
-    #status{display:inline-block;padding:6px 10px;border-radius:6px;margin-bottom:12px}
-    .connecting{background:#ffb74d;color:#000}
-    .connected{background:#81c784;color:#000}
-    .disconnected{background:#ef9a9a;color:#000}
-    #messages{margin-top:12px}
-    .msg{padding:6px 8px;border-radius:6px;background:#f1f1f1;margin:6px 0}
-    .small{color:#666;font-size:13px}
-  </style>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>FQS Queue Monitor</title>
+    <script src="https://cdn.jsdelivr.net/npm/axios/dist/axios.min.js"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/microsoft-signalr/7.0.5/signalr.min.js"></script>
+    <style>
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            margin: 20px;
+            background-color: #f5f5f5;
+        }
+        .container {
+            max-width: 1200px;
+            margin: 0 auto;
+        }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+        }
+        .queues-container {
+            display: flex;
+            gap: 20px;
+            justify-content: center;
+        }
+        .queue-column {
+            background: white;
+            padding: 20px;
+            border-radius: 10px;
+            box-shadow: 0 4px 6px rgba(0,0,0,0.1);
+            min-width: 250px;
+        }
+        .queue-title {
+            text-align: center;
+            font-size: 20px;
+            font-weight: bold;
+            margin-bottom: 15px;
+            color: #333;
+        }
+        .queued { border-top: 4px solid #ff6b6b; }
+        .started { border-top: 4px solid #4ecdc4; }
+        .done { border-top: 4px solid #45b7d1; }
+        
+        .queue-list {
+            min-height: 400px;
+            max-height: 500px;
+            overflow-y: auto;
+        }
+        .queue-item {
+            padding: 12px;
+            margin: 8px 0;
+            background: #f8f9fa;
+            border-radius: 6px;
+            text-align: center;
+            font-size: 18px;
+            font-weight: bold;
+        }
+        .queued-item { background: #ffeaea; border-left: 4px solid #ff6b6b; }
+        .started-item { background: #e0f4f2; border-left: 4px solid #4ecdc4; }
+        .done-item { background: #e3f2fd; border-left: 4px solid #45b7d1; }
+        
+        .status {
+            padding: 10px;
+            margin: 10px 0;
+            border-radius: 5px;
+            text-align: center;
+            font-weight: bold;
+        }
+        .connected { background: #d4edda; color: #155724; }
+        .disconnected { background: #f8d7da; color: #721c24; }
+    </style>
 </head>
 <body>
-  <h2>SignalR Queue (simple)</h2>
-  <div id="status" class="connecting">Connecting...</div>
-  <div class="small">Negotiation: <span id="negotiation">not started</span></div>
+    <div class="container">
+        <div class="header">
+            <h1>FQS Queue Monitor</h1>
+            <div id="connectionStatus" class="status">Connecting to SignalR...</div>
+        </div>
 
-  <div id="messages"></div>
+        <div class="queues-container">
+            <div class="queue-column queued">
+                <div class="queue-title">Queued</div>
+                <div id="queuedList" class="queue-list"></div>
+            </div>
+            
+            <div class="queue-column started">
+                <div class="queue-title">Started</div>
+                <div id="startedList" class="queue-list"></div>
+            </div>
+            
+            <div class="queue-column done">
+                <div class="queue-title">Done</div>
+                <div id="doneList" class="queue-list"></div>
+            </div>
+        </div>
+    </div>
 
-  <script>
-    const HUB_BASE = "https://fqsapi.onrender.com/queueHub";
-    const statusEl = document.getElementById("status");
-    const negotiationEl = document.getElementById("negotiation");
-    const messagesEl = document.getElementById("messages");
+    <script>
+        class QueueMonitor {
+            constructor() {
+                this.queuedList = [];
+                this.startedList = [];
+                this.doneList = [];
+                this.hubConnection = null;
+                
+                this.initializeSignalR();
+                this.getActiveQueue();
+            }
 
-    function setStatus(name){
-      statusEl.className = name;
-      statusEl.textContent = name === "connected" ? "Connected" : name === "connecting" ? "Connecting..." : "Disconnected";
-    }
+            async initializeSignalR() {
+                // Create connection to SignalR hub
+                this.hubConnection = new signalR.HubConnectionBuilder()
+                    .withUrl("https://fqsapi.onrender.com/queueHub")
+                    .withAutomaticReconnect()
+                    .build();
 
-    function appendMessage(text){
-      const p = document.createElement("div");
-      p.className = "msg";
-      p.textContent = text;
-      messagesEl.prepend(p); // newest on top
-    }
+                // Handle received queue codes
+                this.hubConnection.on("ReceiveQueueCode", (receivedData) => {
+                    console.log("Received:", receivedData);
+                    const [queueCodeStr, statusStr] = receivedData.split(':');
+                    const queueCode = parseInt(queueCodeStr);
+                    const status = parseInt(statusStr);
+                    
+                    this.updateQueueLists(queueCode, status);
+                    this.renderAllQueues();
+                });
 
-    function statusLabel(n){
-      if(n === 1) return "Queued";
-      if(n === 2) return "In Progress";
-      if(n === 3) return "Ready/Done";
-      if(n === 4) return "Removed";
-      return "Unknown";
-    }
+                try {
+                    await this.hubConnection.start();
+                    this.updateConnectionStatus("Connected to queue hub!", "connected");
+                    console.log("SignalR connected");
+                } catch (ex) {
+                    this.updateConnectionStatus(`Connection failed: ${ex.message}`, "disconnected");
+                    console.error("SignalR connection failed:", ex);
+                }
+            }
 
-    // 1) quick negotiate check (works in your snippet)
-    async function doNegotiate(){
-      try{
-        negotiationEl.textContent = "negotiating...";
-        const r = await fetch(HUB_BASE + "/negotiate", { method: "POST", headers: {'Content-Type':'application/json'} });
-        if(!r.ok) throw new Error(`${r.status} ${r.statusText}`);
-        const data = await r.json();
-        negotiationEl.textContent = `OK (connectionId: ${data.connectionId})`;
-        return true;
-      }catch(e){
-        negotiationEl.textContent = "negotiation failed";
-        appendMessage("Negotiation error: " + e.message);
-        return false;
-      }
-    }
+            async getActiveQueue() {
+                try {
+                    const response = await axios.post(
+                        "https://fqsapi.onrender.com/FireBaseFQS/GetActiveQueue",
+                        null,
+                        {
+                            headers: {
+                                'Content-Type': 'application/json',
+                            },
+                            timeout: 10000
+                        }
+                    );
 
-    // 2) start SignalR (v7 client)
-    async function startSignalR(){
-      setStatus("connecting");
-      const connection = new signalR.HubConnectionBuilder()
-        .withUrl(HUB_BASE)
-        .withAutomaticReconnect()
-        .build();
+                    const activeQueue = response.data;
+                    
+                    // Clear existing lists
+                    this.queuedList = [];
+                    this.startedList = [];
+                    this.doneList = [];
 
-      connection.onreconnecting(() => setStatus("connecting"));
-      connection.onreconnected(() => setStatus("connected"));
-      connection.onclose(() => setStatus("disconnected"));
+                    // Populate queues from API response
+                    if (activeQueue.queued) {
+                        this.queuedList = activeQueue.queued.map(code => ({ qCode: code }));
+                    }
+                    if (activeQueue.inProgress) {
+                        this.startedList = activeQueue.inProgress.map(code => ({ qCode: code }));
+                    }
+                    if (activeQueue.completed) {
+                        this.doneList = activeQueue.completed.map(code => ({ qCode: code }));
+                    }
 
-      connection.on("ReceiveQueueCode", (payload) => {
-        try{
-          const parts = String(payload).split(":");
-          const code = parts[0];
-          const st = parseInt(parts[1], 10);
-          const label = statusLabel(st);
-          appendMessage(`Queue Code: ${code} — Status: ${st} (${label})`);
-        }catch(err){
-          appendMessage("Malformed payload: " + payload);
+                    this.renderAllQueues();
+                    
+                } catch (error) {
+                    console.error("Failed to get active queue:", error);
+                }
+            }
+
+            updateQueueLists(queueCode, status) {
+                const item = { qCode: queueCode };
+                
+                switch (status) {
+                    case 1: // Queued
+                        if (!this.queuedList.some(x => x.qCode === queueCode)) {
+                            this.queuedList.push(item);
+                        }
+                        break;
+                    case 2: // Started
+                        this.queuedList = this.queuedList.filter(x => x.qCode !== queueCode);
+                        if (!this.startedList.some(x => x.qCode === queueCode)) {
+                            this.startedList.push(item);
+                        }
+                        break;
+                    case 3: // Done
+                        this.startedList = this.startedList.filter(x => x.qCode !== queueCode);
+                        if (!this.doneList.some(x => x.qCode === queueCode)) {
+                            this.doneList.push(item);
+                        }
+                        break;
+                    case 4: // Remove
+                        this.doneList = this.doneList.filter(x => x.qCode !== queueCode);
+                        break;
+                }
+            }
+
+            renderAllQueues() {
+                this.renderQueue(this.queuedList, "queuedList", "queued-item");
+                this.renderQueue(this.startedList, "startedList", "started-item");
+                this.renderQueue(this.doneList, "doneList", "done-item");
+            }
+
+            renderQueue(queueArray, elementId, itemClass) {
+                const element = document.getElementById(elementId);
+                if (queueArray.length === 0) {
+                    element.innerHTML = '<div class="queue-item">No items</div>';
+                    return;
+                }
+                
+                element.innerHTML = queueArray.map(item => 
+                    `<div class="queue-item ${itemClass}">${item.qCode}</div>`
+                ).join('');
+            }
+
+            updateConnectionStatus(message, statusClass) {
+                const statusElement = document.getElementById("connectionStatus");
+                statusElement.textContent = message;
+                statusElement.className = `status ${statusClass}`;
+            }
         }
-      });
 
-      try{
-        await connection.start();
-        setStatus("connected");
-        appendMessage("SignalR connected.");
-      }catch(err){
-        setStatus("disconnected");
-        appendMessage("SignalR start failed: " + (err && err.toString()));
-        // retry after delay
-        setTimeout(() => startSignalR(), 4000);
-      }
-    }
-
-    (async function boot(){
-      const ok = await doNegotiate();
-      // only attempt to start connection if negotiation succeeded
-      if(ok) await startSignalR();
-      else appendMessage("Skipping SignalR start due negotiation failure.");
-    })();
-  </script>
+        // Initialize the queue monitor when page loads
+        document.addEventListener('DOMContentLoaded', () => {
+            new QueueMonitor();
+        });
+    </script>
 </body>
 </html>
