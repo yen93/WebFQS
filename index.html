@@ -70,14 +70,45 @@
         }
         .connected { background: #d4edda; color: #155724; }
         .disconnected { background: #f8d7da; color: #721c24; }
+        .header {
+            text-align: center;
+            margin-bottom: 30px;
+            position: relative; /* Add this */
+        }
+
+        .status-dot {
+            position: absolute;
+            top: 10px;
+            right: 10px;
+            width: 16px;
+            height: 16px;
+            border-radius: 50%;
+            border: 2px solid white;
+            box-shadow: 0 0 5px rgba(0,0,0,0.3);
+        }
+
+        .status-dot.connected {
+            background: #28a745; /* Green */
+        }
+
+        .status-dot.disconnected {
+            background: #dc3545; /* Red */
+        }
+
+        .status-dot.connecting {
+            background: #ffc107; /* Yellow */
+            animation: pulse 1.5s infinite;
+        }
+
+@keyframes pulse {
+    0% { opacity: 1; }
+    50% { opacity: 0.5; }
+    100% { opacity: 1; }
+}
     </style>
 </head>
 <body>
-    <div class="container">
-        <div class="header">
-            <h1>FQS Queue Monitor</h1>
-            <div id="connectionStatus" class="status">Connecting to SignalR...</div>
-        </div>
+        <div id="connectionStatus" class="status-dot"></div>
 
         <div class="queues-container">
             <div class="queue-column queued">
@@ -129,12 +160,21 @@
 
                 try {
                     await this.hubConnection.start();
-                    this.updateConnectionStatus("Connected to queue hub!", "connected");
+                    this.updateConnectionStatus("connected"); // Just "connected"
                     console.log("SignalR connected");
                 } catch (ex) {
-                    this.updateConnectionStatus(`Connection failed: ${ex.message}`, "disconnected");
+                    this.updateConnectionStatus("disconnected"); // Just "disconnected"
                     console.error("SignalR connection failed:", ex);
                 }
+
+                // Add reconnecting state
+                this.hubConnection.onreconnecting(() => {
+                    this.updateConnectionStatus("connecting");
+                });
+
+                this.hubConnection.onreconnected(() => {
+                    this.updateConnectionStatus("connected");
+                });
             }
 
             async getActiveQueue() {
@@ -220,10 +260,9 @@
                 ).join('');
             }
 
-            updateConnectionStatus(message, statusClass) {
+            updateConnectionStatus(status) {
                 const statusElement = document.getElementById("connectionStatus");
-                statusElement.textContent = message;
-                statusElement.className = `status ${statusClass}`;
+                statusElement.className = `status-dot ${status}`;
             }
         }
 
@@ -234,3 +273,4 @@
     </script>
 </body>
 </html>
+
